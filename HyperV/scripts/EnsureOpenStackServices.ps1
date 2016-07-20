@@ -5,6 +5,10 @@ Param(
     [string]$servicePassword
 )
 
+$scriptLocation = [System.IO.Path]::GetDirectoryName($myInvocation.MyCommand.Definition)
+. "$scriptLocation\utils.ps1"
+
+
 <#
 Copyright 2012 Aaron Jensen (Carbon C# code)
 Copyright 2014 Cloudbase Solutions Srl (PowerShell script)
@@ -422,11 +426,11 @@ Function Check-Service
     }
     #to make sure the service was actually deleted
     if (Get-Service $serviceName -ErrorAction SilentlyContinue){
-	Write-Host "Service $serviceName failed deletion"
+	log_message "Service $serviceName failed deletion"
     }
     else
     {
-	Write-Host "Service $serviceName succesfully deleted"
+	log_message "Service $serviceName succesfully deleted"
     }
 
     $hasServiceFileFolder = Test-Path $serviceFileLocation
@@ -434,11 +438,11 @@ Function Check-Service
     $hasService = Get-Service $serviceName -ErrorAction SilentlyContinue
     $hasCorrectUser = (Get-WmiObject -namespace "root\cimv2" -class Win32_Service -Filter $filter).StartName -like "*$serviceUsername*"
 
-    Write-Host "Initial status for $serviceName is:"
-    Write-Host "hasServiceFileFolder: $hasServiceFileFolder"
-    Write-Host "hasServiceFile: $hasServiceFile"
-    Write-Host "hasService: $hasService"
-    Write-Host "hasCorrectUser: $hasCorrectUser"
+    log_message "Initial status for $serviceName is:"
+    log_message "hasServiceFileFolder: $hasServiceFileFolder"
+    log_message "hasServiceFile: $hasServiceFile"
+    log_message "hasService: $hasService"
+    log_message "hasCorrectUser: $hasCorrectUser"
 
     if(!$hasServiceFileFolder)
     {
@@ -453,7 +457,7 @@ Function Check-Service
     }
     else 
     {
-        Write-Host "Service File folder exists"
+        log_message "Service File folder exists"
     }
 
     if(!$hasServiceFile)
@@ -469,7 +473,7 @@ Function Check-Service
     }
     else 
     {
-        Write-Host "Service file executable exists"
+        log_message "Service file executable exists"
     }
 
     if(!$hasService)
@@ -485,14 +489,14 @@ Function Check-Service
     }
     else 
     {
-        Write-Host "Service $serviceName already registered"
+        log_message "Service $serviceName already registered"
     }
 
     if((Get-Service -Name $serviceName).Status -eq "Running")
     {
         Stop-Service $serviceName
-        Write-Host "Service $serviceName was found in Running state."
-        Write-Host "Current $serviceName state is: $((Get-Service -Name $serviceName).Status)"
+        log_message "Service $serviceName was found in Running state."
+        log_message "Current $serviceName state is: $((Get-Service -Name $serviceName).Status)"
     }
 
     if(!$hasCorrectUser)
@@ -508,7 +512,7 @@ Function Check-Service
     }
     else 
     {
-        Write-Host "Service $serviceName already has correct user credentials."
+        log_message "Service $serviceName already has correct user credentials."
     }
 }
 

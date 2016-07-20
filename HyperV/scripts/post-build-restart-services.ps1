@@ -6,19 +6,19 @@
 . "C:\OpenStack\osbrick-ci\HyperV\scripts\utils.ps1"
 
 
-Write-Host "post-build: Stoping the services!"
+log_message "post-build: Stoping the services!"
 
 Stop-Service nova-compute
 
 Stop-Service neutron-hyperv-agent
 
-Write-Host "post-build: Cleaning previous logs!"
+log_message "post-build: Cleaning previous logs!"
 
 Remove-Item -Force C:\OpenStack\Log\*.log
 
-Write-Host "post-build: Starting the services!"
+log_message "post-build: Starting the services!"
 
-Write-Host "Starting nova-compute service"
+log_message "Starting nova-compute service"
 Try
 {
     Start-Service nova-compute
@@ -33,7 +33,7 @@ Catch
 Start-Sleep -s 30
 if ($(get-service nova-compute).Status -eq "Stopped")
 {
-    Write-Host "We try to start:"
+    log_message "We try to start:"
     Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
     Try
     {
@@ -55,7 +55,7 @@ if ($(get-service nova-compute).Status -eq "Stopped")
     }
 }
 
-Write-Host "Starting neutron-hyperv-agent service"
+log_message "Starting neutron-hyperv-agent service"
 Try
 {
     Start-Service neutron-hyperv-agent
@@ -70,7 +70,7 @@ Catch
 Start-Sleep -s 30
 if ($(get-service neutron-hyperv-agent).Status -eq "Stopped")
 {
-    Write-Host "We try to start:"
+    log_message "We try to start:"
     Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
     Try
     {

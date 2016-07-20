@@ -150,6 +150,17 @@ function cherry_pick($commit) {
     $ErrorActionPreference = $eapSet
 }
 
-function log_message($message){
-    Write-Host "[$(Get-Date)] $message"
+function log_message {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string]$message,
+        [string]$location = 'console'
+    )
+    $formated_msg = "[$(Get-Date)] $message"
+    if ($location -eq 'console') {
+        Write-Host $formated_msg
+    }
+    else {
+        $formated_msg >> $location
+    }
 }

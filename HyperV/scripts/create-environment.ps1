@@ -38,12 +38,12 @@ trusted-host = 10.0.110.1
 $ErrorActionPreference = "SilentlyContinue"
 
 # Do a selective teardown
-Write-Host "Ensuring nova and neutron services are stopped."
+log_message "Ensuring nova and neutron services are stopped."
 Stop-Service -Name nova-compute -Force
 Stop-Service -Name neutron-hyperv-agent -Force
 Stop-Service -Name cinder-volume -Force
 
-Write-Host "Stopping any possible python processes left."
+log_message "Stopping any possible python processes left."
 Stop-Process -Name python -Force
 
 if (Get-Process -Name nova-compute){
@@ -87,7 +87,7 @@ if ($(Get-Service cinder-volume).Status -ne "Stopped"){
     Throw "Cinder service is still running"
 }
 
-Write-Host "Cleaning up the config folder."
+log_message "Cleaning up the config folder."
 if ($hasConfigDir -eq $false) {
     mkdir $configDir
 }else{
@@ -132,7 +132,7 @@ if ($hasNeutronTemplate -eq $false){
 }
 
 if ($isDebug -eq  'yes') {
-    Write-Host "Status of $buildDir before GitClonePull"
+    log_message "Status of $buildDir before GitClonePull"
     Get-ChildItem $buildDir
 }
 
@@ -180,8 +180,8 @@ if (Test-Path $pythonDir)
 {
     Remove-Item -Recurse -Force $pythonDir
 }
-Write-Host "Ensure Python folder is up to date"
-Write-Host "Extracting archive.."
+log_message "Ensure Python folder is up to date"
+log_message "Extracting archive.."
 & $7zExec x -y "$pythonArchive"
 & $7zExec x -y "$pythonTar"
 
@@ -224,17 +224,17 @@ cp $templateDir\distutils.cfg "$pythonDir\Lib\distutils\distutils.cfg"
 
 
 if ($isDebug -eq  'yes') {
-    Write-Host "BuildDir is: $buildDir"
-    Write-Host "ProjectName is: $projectName"
-    Write-Host "Listing $buildDir parent directory:"
+    log_message "BuildDir is: $buildDir"
+    log_message "ProjectName is: $projectName"
+    log_message "Listing $buildDir parent directory:"
     Get-ChildItem ( Get-Item $buildDir ).Parent.FullName
-    Write-Host "Listing $buildDir before install"
+    log_message "Listing $buildDir before install"
     Get-ChildItem $buildDir
 }
 
 ExecRetry {
     if ($isDebug -eq  'yes') {
-        Write-Host "Content of $buildDir\neutron"
+        log_message "Content of $buildDir\neutron"
         Get-ChildItem $buildDir\neutron
     }
     pushd $buildDir\neutron
@@ -245,7 +245,7 @@ ExecRetry {
 
 ExecRetry {
     if ($isDebug -eq  'yes') {
-        Write-Host "Content of $buildDir\networking-hyperv"
+        log_message "Content of $buildDir\networking-hyperv"
         Get-ChildItem $buildDir\networking-hyperv
     }
     pushd $buildDir\networking-hyperv
@@ -258,7 +258,7 @@ if($jobType -eq 'smbfs')
 {
     ExecRetry {
         if ($isDebug -eq  'yes') {
-            Write-Host "Content of $buildDir\cinder"
+            log_message "Content of $buildDir\cinder"
             Get-ChildItem $buildDir\cinder
         }
         pushd $buildDir\cinder
@@ -305,7 +305,7 @@ ExecRetry {
 
 ExecRetry {
     if ($isDebug -eq  'yes') {
-        Write-Host "Content of $buildDir\nova"
+        log_message "Content of $buildDir\nova"
         Get-ChildItem $buildDir\nova
     }
     pushd $buildDir\nova
@@ -361,31 +361,28 @@ if ($hasNeutronExec -eq $false){
 Remove-Item -Recurse -Force "$remoteConfigs\$hostname\*"
 Copy-Item -Recurse $configDir "$remoteConfigs\$hostname"
 
-Write-Host "Starting the services"
+log_message "Starting the services"
 
 
 
 if ($jobType -eq 'smbfs')
 {
-    $currDate = (Get-Date).ToString()
-    Write-Host "$currDate Starting cinder-volume service"
+    log_message "Starting cinder-volume service"
     Try
     {
         Start-Service cinder-volume
     }
     Catch
     {
-        Write-Host "Can not start the cinder-volume service."
+        log_message "Can not start the cinder-volume service."
     }
     Start-Sleep -s 30
     if ($(get-service cinder-volume).Status -eq "Stopped")
     {
-        Write-Host "cinder-volume service is not running."
-        $currDate = (Get-Date).ToString()
-        Write-Host "$currDate We try to start:"
+        log_message "cinder-volume service is not running."
+        log_message "We try to start:"
         Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\cinder-volume.exe" -ArgumentList "--config-file $configDir\cinder.conf"
-        $currDate = (Get-Date).ToString()
-        Add-Content "$openstackLogs\cinder-volume.log" "`n$currDate Starting cinder-volume as a python process."
+        log_message "Starting cinder-volume as a python process." -location "$openstackLogs\cinder-volume.log" 
         Try
         {
             $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\cinder-volume.exe" -ArgumentList "--config-file $configDir\cinder.conf"
@@ -407,25 +404,22 @@ if ($jobType -eq 'smbfs')
     }
 }
 
-$currDate = (Get-Date).ToString()
-Write-Host "$currDate Starting nova-compute service"
+log_message "Starting nova-compute service"
 Try
 {
     Start-Service nova-compute
 }
 Catch
 {
-    Write-Host "Can not start the nova-compute service."
+    log_message "Can not start the nova-compute service."
 }
 Start-Sleep -s 30
 if ($(get-service nova-compute).Status -eq "Stopped")
 {
-    Write-Host "nova-compute service is not running."
-    $currDate = (Get-Date).ToString()
-    Write-Host "$currDate We try to start:"
+    log_message "nova-compute service is not running."
+    log_message "We try to start:"
     Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    $currDate = (Get-Date).ToString()
-    Add-Content "$openstackLogs\nova-compute.log" "`n$currDate Starting nova-compute as a python process."
+    log_message "Starting nova-compute as a python process." -location "$openstackLogs\nova-compute.log"
     Try
     {
     	$proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
@@ -446,25 +440,22 @@ if ($(get-service nova-compute).Status -eq "Stopped")
     }
 }
 
-$currDate = (Get-Date).ToString()
-Write-Host "$currDate Starting neutron-hyperv-agent service"
+log_message "Starting neutron-hyperv-agent service"
 Try
 {
     Start-Service neutron-hyperv-agent
 }
 Catch
 {
-    Write-Host "Can not start the neutron-hyperv-agent service."
+    log_message "Can not start the neutron-hyperv-agent service."
 }
 Start-Sleep -s 30
 if ($(get-service neutron-hyperv-agent).Status -eq "Stopped")
 {
-    Write-Host "neutron-hyperv-agent service is not running."
-    $currDate = (Get-Date).ToString()
-    Write-Host "$currDate We try to start:"
-     Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonScripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    $currDate = (Get-Date).ToString()
-    Add-Content "$openstackLogs\neutron-hyperv-agent.log" "`n$currDate starting neutron-hyperv-agent as a python process."
+    log_message "neutron-hyperv-agent service is not running."
+    log_message "We try to start:"
+    Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonScripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
+    log_message "starting neutron-hyperv-agent as a python process." -location "$openstackLogs\neutron-hyperv-agent.log"
     Try
     {
     	$proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonScripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
