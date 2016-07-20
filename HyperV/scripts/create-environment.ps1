@@ -28,6 +28,100 @@ $hasBinDir = Test-Path $binDir
 $hasMkisoFs = Test-Path $binDir\mkisofs.exe
 $hasQemuImg = Test-Path $binDir\qemu-img.exe
 
+$deployedServices = @('nova' 'neutron-hyperv-agent')
+if ($jobType -eq 'smbfs') {
+    $deployedServices += 'cinder-volume'
+}
+
+# Python projects installed from repo. If the repo name is missing,
+# the project is expected to be already cloned at $buildDir.
+$installedFromRepo = @(
+    @{projectName="nova";
+      repo="https://git.openstack.org/openstack/nova.git";
+      branch=$branchName;
+      # TODO(lpetrut): remove this once the nova patch that sets the
+      # Hyper-V driver to use os-brick gets in, or when this is
+      # implemented in compute-hyperv.
+      # Note: this patch may need to be rebased from time to time.
+      openstackPatchRefs=@("refs/changes/04/273504/9")},
+    @{projectName="neutron";
+      repo="https://git.openstack.org/openstack/neutron.git";
+      branch=$branchName},
+    @{projectName="networking-hyperv";
+      repo="https://git.openstack.org/openstack/networking-hyperv.git";
+      branch=$branchName},
+    @{projectName="os-brick";
+      branch=$branchName;
+      # TODO(lpetrut): remove those cherry-picks once all
+      # the Windows connectors get in.    
+      openstackPatchRefs=@(
+          # The patch adding the Windows FC connector.
+          "refs/changes/80/323780/8",
+          "refs/changes/81/323781/8")}
+)
+
+if ($jobType -eq 'smbfs') {
+    $cinderInstallConfig = @{
+        projectName="cinder";
+        repo="https://git.openstack.org/openstack/cinder.git";
+        branch=$branchName;
+        extraRemotes=@(
+            @{remoteName="downstream";
+              remoteUrl="https://github.com/petrutlucian94/cinder"}
+        )
+    }
+    if ($branchName.ToLower() -eq "master") {
+        $cinderInstallConfig.cherryPicks = @(
+            'dcd839978ca8995cada8a62a5f19d21eaeb399df',
+            'f711195367ead9a2592402965eb7c7a73baebc9f'
+        )
+    }
+    else {
+        $cinderInstallConfig.cherryPicks = @(
+            '0c13ba732eb5b44e90a062a1783b29f2718f3da8',
+            '06ee0b259daf13e8c0028a149b3882f1e3373ae1'
+        )
+    }
+
+    $installedFromRepo += $cinderInstallConfig;
+}
+
+function install_from_repo($projectInfo) {
+    # TODO: add more debug information.
+    log_message "Installing project: $projectInfo"
+    $projectDir = "$buildDir\$($projectInfo.projectName)"
+    ExecRetry {
+        if ($projectInfo.branch)
+            GitClonePull $projectDir $projectInfo.branch
+
+        if ($isDebug -eq  'yes') {
+            log_message "Content of $projectDir"
+            Get-ChildItem $projectDir
+        }
+        pushd $projectDir
+
+        foreach($extraRemote in $projectInfo.extraRemotes) {
+            git remote add $extraRemote.remoteName $extraRemote.remoteUrl
+            git fetch $extraRemote.remoteName
+        }
+
+        foreach($commitId in $projectInfo.cherryPicks) {
+            cherry_pick $commitId
+        }
+
+        foreach($ref in $projectInfo.openstackPatchRefs) {
+            git fetch "https://git.openstack.org/openstack/$($projectInfo.projectName)"
+            cherry_pick FETCH_HEAD
+        }
+
+        & pip install $projectDir
+        if ($LastExitCode) {
+            Throw "Failed to install $($projectInfo.projectName) from repo"
+        }
+        popd
+    }
+}
+
 $pip_conf_content = @"
 [global]
 index-url = http://10.0.110.1:8080/cloudbase/CI/+simple/
@@ -35,57 +129,18 @@ index-url = http://10.0.110.1:8080/cloudbase/CI/+simple/
 trusted-host = 10.0.110.1
 "@
 
-$ErrorActionPreference = "SilentlyContinue"
-
-# Do a selective teardown
-log_message "Ensuring nova and neutron services are stopped."
-Stop-Service -Name nova-compute -Force
-Stop-Service -Name neutron-hyperv-agent -Force
-Stop-Service -Name cinder-volume -Force
-
-log_message "Stopping any possible python processes left."
-Stop-Process -Name python -Force
-
-if (Get-Process -Name nova-compute){
-    Throw "Nova is still running on this host"
-}
-
-if (Get-Process -Name neutron-hyperv-agent){
-    Throw "Neutron is still running on this host"
-}
-
-if (Get-Process -Name python){
-    Throw "Python processes still running on this host"
-}
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Service neutron-hyperv-agent -ErrorAction SilentlyContinue))
-{
-    Throw "Neutron Hyper-V Agent Service not registered"
-}
+log_message ("Ensuring that the following services are stopped and " +
+             "no possbile python processes are left: $deployedServices")
+foreach($serviceName in $deployedServices) {
+    ensure_service $serviceName -requestedState "Stopped"
 
-if (-not (get-service nova-compute -ErrorAction SilentlyContinue))
-{
-    Throw "Nova Compute Service not registered"
-}
-
-if (-not (get-service cinder-volume -ErrorAction SilentlyContinue))
-{
-    Throw "Cinder Volume Service not registered"
-}
-
-if ($(Get-Service nova-compute).Status -ne "Stopped"){
-    Throw "Nova service is still running"
-}
-
-if ($(Get-Service neutron-hyperv-agent).Status -ne "Stopped"){
-    Throw "Neutron service is still running"
-}
-
-if ($(Get-Service cinder-volume).Status -ne "Stopped"){
-    Throw "Cinder service is still running"
-}
+    log_message "Stopping any possible python processes left."
+    ensure_process_stopped $serviceName
+} 
+ensure_process_stopped "python"
 
 log_message "Cleaning up the config folder."
 if ($hasConfigDir -eq $false) {
@@ -139,22 +194,7 @@ if ($isDebug -eq  'yes') {
 git config --global user.email "hyper-v_ci@microsoft.com"
 git config --global user.name "Hyper-V CI"
 
-ExecRetry {
-    GitClonePull "$buildDir\nova" "https://git.openstack.org/openstack/nova.git" $branchName
-}
-ExecRetry {
-    GitClonePull "$buildDir\neutron" "https://git.openstack.org/openstack/neutron.git" $branchName
-}
-ExecRetry {
-    GitClonePull "$buildDir\networking-hyperv" "https://git.openstack.org/openstack/networking-hyperv.git" $branchName
-}
 
-if ($jobType -eq 'smbfs')
-{
-    ExecRetry {
-        GitClonePull "$buildDir\cinder" "https://git.openstack.org/openstack/cinder.git" $branchName
-    }    
-}
 
 $hasLogDir = Test-Path $openstackLogs
 if ($hasLogDir -eq $false){
@@ -232,93 +272,8 @@ if ($isDebug -eq  'yes') {
     Get-ChildItem $buildDir
 }
 
-ExecRetry {
-    if ($isDebug -eq  'yes') {
-        log_message "Content of $buildDir\neutron"
-        Get-ChildItem $buildDir\neutron
-    }
-    pushd $buildDir\neutron
-    & pip install $buildDir\neutron
-    if ($LastExitCode) { Throw "Failed to install neutron from repo" }
-    popd
-}
-
-ExecRetry {
-    if ($isDebug -eq  'yes') {
-        log_message "Content of $buildDir\networking-hyperv"
-        Get-ChildItem $buildDir\networking-hyperv
-    }
-    pushd $buildDir\networking-hyperv
-    & pip install $buildDir\networking-hyperv
-    if ($LastExitCode) { Throw "Failed to install networking-hyperv from repo" }
-    popd
-}
-
-if($jobType -eq 'smbfs')
-{
-    ExecRetry {
-        if ($isDebug -eq  'yes') {
-            log_message "Content of $buildDir\cinder"
-            Get-ChildItem $buildDir\cinder
-        }
-        pushd $buildDir\cinder
-
-        git remote add downstream https://github.com/petrutlucian94/cinder
-        
-        ExecRetry {
-            git fetch downstream
-            if ($LastExitCode) { Throw "Failed fetching remote downstream petrutlucian94" }
-        }
-
-        git checkout -b "testBranch"
-        if ($branchName.ToLower() -eq "master") {
-            cherry_pick dcd839978ca8995cada8a62a5f19d21eaeb399df
-            cherry_pick f711195367ead9a2592402965eb7c7a73baebc9f
-        }
-        else {
-            cherry_pick 0c13ba732eb5b44e90a062a1783b29f2718f3da8
-            cherry_pick 06ee0b259daf13e8c0028a149b3882f1e3373ae1
-        }
-
-        & pip install $buildDir\cinder
-        if ($LastExitCode) { Throw "Failed to install cinder from repo" }
-        popd
-    }
-}
-
-ExecRetry {
-    pushd $buildDir\os-brick
-
-    # TODO(lpetrut): remove those cherry-picks once all the Windows connectors get in.    
-    # The patch adding the Windows FC connector.
-    git fetch https://git.openstack.org/openstack/os-brick refs/changes/80/323780/8
-    cherry_pick FETCH_HEAD
-
-    # The patch adding the Windows SMBFS connector.
-    git fetch https://git.openstack.org/openstack/os-brick refs/changes/81/323781/8
-    cherry_pick FETCH_HEAD
-
-    & pip install $buildDir\os-brick
-    popd
-}
-
-
-ExecRetry {
-    if ($isDebug -eq  'yes') {
-        log_message "Content of $buildDir\nova"
-        Get-ChildItem $buildDir\nova
-    }
-    pushd $buildDir\nova
-
-    # TODO(lpetrut): remove this once the nova patch that sets the Hyper-V driver to use
-    # os-brick gets in, or when this is implemented in compute-hyperv.
-    # Note: this patch may need to be rebased from time to time.
-    git fetch https://git.openstack.org/openstack/nova refs/changes/04/273504/9
-    cherry_pick FETCH_HEAD
-
-    & pip install $buildDir\nova
-    if ($LastExitCode) { Throw "Failed to install nova fom repo" }
-    popd
+foreach($projectInfo in $installedFromRepo) {
+    install_from_repo $projectInfo
 }
 
 # Note: be careful as WMI queries may return only one element, in which case we
@@ -364,114 +319,13 @@ Copy-Item -Recurse $configDir "$remoteConfigs\$hostname"
 log_message "Starting the services"
 
 
-
 if ($jobType -eq 'smbfs')
-{
-    log_message "Starting cinder-volume service"
-    Try
-    {
-        Start-Service cinder-volume
-    }
-    Catch
-    {
-        log_message "Can not start the cinder-volume service."
-    }
-    Start-Sleep -s 30
-    if ($(get-service cinder-volume).Status -eq "Stopped")
-    {
-        log_message "cinder-volume service is not running."
-        log_message "We try to start:"
-        Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\cinder-volume.exe" -ArgumentList "--config-file $configDir\cinder.conf"
-        log_message "Starting cinder-volume as a python process." -location "$openstackLogs\cinder-volume.log" 
-        Try
-        {
-            $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\cinder-volume.exe" -ArgumentList "--config-file $configDir\cinder.conf"
-        }
-        Catch
-        {
-            Throw "Could not start the process manually"
-        }
-        Start-Sleep -s 30
-        if (! $proc.HasExited)
-        {
-            Stop-Process -Id $proc.Id -Force
-            Throw "Process started fine when run manually."
-        }
-        else
-        {
-            Throw "Can not start the cinder-volume service. The manual run failed as well."
-        }
-    }
-}
-
-log_message "Starting nova-compute service"
-Try
-{
-    Start-Service nova-compute
-}
-Catch
-{
-    log_message "Can not start the nova-compute service."
-}
-Start-Sleep -s 30
-if ($(get-service nova-compute).Status -eq "Stopped")
-{
-    log_message "nova-compute service is not running."
-    log_message "We try to start:"
-    Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    log_message "Starting nova-compute as a python process." -location "$openstackLogs\nova-compute.log"
-    Try
-    {
-    	$proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    }
-    Catch
-    {
-    	Throw "Could not start the process manually"
-    }
-    Start-Sleep -s 30
-    if (! $proc.HasExited)
-    {
-    	Stop-Process -Id $proc.Id -Force
-    	Throw "Process started fine when run manually."
-    }
-    else
-    {
-    	Throw "Can not start the nova-compute service. The manual run failed as well."
-    }
-}
-
-log_message "Starting neutron-hyperv-agent service"
-Try
-{
-    Start-Service neutron-hyperv-agent
-}
-Catch
-{
-    log_message "Can not start the neutron-hyperv-agent service."
-}
-Start-Sleep -s 30
-if ($(get-service neutron-hyperv-agent).Status -eq "Stopped")
-{
-    log_message "neutron-hyperv-agent service is not running."
-    log_message "We try to start:"
-    Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonScripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    log_message "starting neutron-hyperv-agent as a python process." -location "$openstackLogs\neutron-hyperv-agent.log"
-    Try
-    {
-    	$proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonScripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    }
-    Catch
-    {
-    	Throw "Could not start the process manually"
-    }
-    Start-Sleep -s 30
-    if (! $proc.HasExited)
-    {
-    	Stop-Process -Id $proc.Id -Force
-    	Throw "Process started fine when run manually."
-    }
-    else
-    {
-    	Throw "Can not start the neutron-hyperv-agent service. The manual run failed as well."
-    }
-}
+    start_openstack_service 'cinder-volume' -configFile "$configDir\cinder.conf" `
+                            -logDir $openstackLogs `
+                            -exeFile "$pythonDir\Scripts\cinder-volume.exe"
+start_openstack_service 'nova-compute' -configFile "$configDir\nova.conf" `
+                        -logDir $openstackLogs `
+                        -exeFile "$pythonDir\Scripts\nova-compute.exe"
+start_openstack_service 'neutron-hyperv-agent' -configFile "$configDir\neutron_hyperv_agent.conf" `
+                        -logDir $openstackLogs `
+                        -exeFile "$pythonDir\Scripts\nova-compute.exe"

@@ -273,7 +273,7 @@ if [[ $PROC_COUNT -gt 0 ]]; then
 fi
 
 # HyperV post-build services restart
-post_build_restart_hyperv_services $hyperv01 $WIN_USER $WIN_PASS
+post_build_restart_hyperv_services $hyperv01 $WIN_USER $WIN_PASS $JOB_TYPE
 
 # Check for nova join (must equal 1)
 run_ssh_cmd_with_retry ubuntu@$FLOATING_IP $DEVSTACK_SSH_KEY 'source /home/ubuntu/keystonerc; NOVA_COUNT=$(nova service-list | grep nova-compute | grep -c -w up); if [ "$NOVA_COUNT" != 1 ];then nova service-list; exit 1;fi' 12

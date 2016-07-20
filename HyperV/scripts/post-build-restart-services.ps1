@@ -1,16 +1,24 @@
 # This script restart the nova and neutron services and cleans logs
 # Needed to compensate for HyperV building ahead of time
 #
+Param(
+    [string]$jobType='iscsi',
+)
 
 . "C:\OpenStack\osbrick-ci\HyperV\scripts\config.ps1"
 . "C:\OpenStack\osbrick-ci\HyperV\scripts\utils.ps1"
 
 
+# We may set this in config.ps1
+$deployedServices = @('nova' 'neutron-hyperv-agent')
+if ($jobType -eq 'smbfs') {
+    $deployedServices += 'cinder-volume'
+}
+
 log_message "post-build: Stoping the services!"
 
-Stop-Service nova-compute
-
-Stop-Service neutron-hyperv-agent
+foreach($serviceName in $deployedServices) {
+    ensure_service $serviceName -requestedState "Stopped"
 
 log_message "post-build: Cleaning previous logs!"
 
@@ -18,77 +26,13 @@ Remove-Item -Force C:\OpenStack\Log\*.log
 
 log_message "post-build: Starting the services!"
 
-log_message "Starting nova-compute service"
-Try
-{
-    Start-Service nova-compute
-}
-Catch
-{
-    $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    Start-Sleep -s 30
-    if (! $proc.HasExited) {Stop-Process -Id $proc.Id -Force}
-    Throw "Can not start the nova-compute service"
-}
-Start-Sleep -s 30
-if ($(get-service nova-compute).Status -eq "Stopped")
-{
-    log_message "We try to start:"
-    Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    Try
-    {
-        $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\nova-compute.exe" -ArgumentList "--config-file $configDir\nova.conf"
-    }
-    Catch
-    {
-        Throw "Could not start the process manually"
-    }
-    Start-Sleep -s 30
-    if (! $proc.HasExited)
-    {
-        Stop-Process -Id $proc.Id -Force
-        Throw "Process started fine when run manually."
-    }
-    else
-    {
-        Throw "Can not start the nova-compute service. The manual run failed as well."
-    }
-}
-
-log_message "Starting neutron-hyperv-agent service"
-Try
-{
-    Start-Service neutron-hyperv-agent
-}
-Catch
-{
-    $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    Start-Sleep -s 30
-    if (! $proc.HasExited) {Stop-Process -Id $proc.Id -Force}
-    Throw "Can not start the neutron-hyperv-agent service"
-}
-Start-Sleep -s 30
-if ($(get-service neutron-hyperv-agent).Status -eq "Stopped")
-{
-    log_message "We try to start:"
-    Write-Host Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    Try
-    {
-        $proc = Start-Process -PassThru -RedirectStandardError "$openstackLogs\process_error.txt" -RedirectStandardOutput "$openstackLogs\process_output.txt" -FilePath "$pythonDir\Scripts\neutron-hyperv-agent.exe" -ArgumentList "--config-file $configDir\neutron_hyperv_agent.conf"
-    }
-    Catch
-    {
-        Throw "Could not start the process manually"
-    }
-    Start-Sleep -s 30
-    if (! $proc.HasExited)
-    {
-        Stop-Process -Id $proc.Id -Force
-        Throw "Process started fine when run manually."
-    }
-    else
-    {
-        Throw "Can not start the neutron-hyperv-agent service. The manual run failed as well."
-    }
-}
-
+if ($jobType -eq 'smbfs')
+    start_openstack_service 'cinder-volume' -configFile "$configDir\cinder.conf" `
+                            -logDir $openstackLogs `
+                            -exeFile "$pythonDir\Scripts\cinder-volume.exe"
+start_openstack_service 'nova-compute' -configFile "$configDir\nova.conf" `
+                        -logDir $openstackLogs `
+                        -exeFile "$pythonDir\Scripts\nova-compute.exe"
+start_openstack_service 'neutron-hyperv-agent' -configFile "$configDir\neutron_hyperv_agent.conf" `
+                        -logDir $openstackLogs `
+                        -exeFile "$pythonDir\Scripts\nova-compute.exe"

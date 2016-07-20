@@ -164,3 +164,102 @@ function log_message {
         $formated_msg >> $location
     }
 }
+
+function ensure_process_stopped {
+    $ErrorActionPreference = "Stop"
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string]$procName,
+        [switch]$changeState
+    )
+    if ($changeState) {
+        Stop-Process -Name $procName -ErrorAction SilentlyContinue
+    }
+    if (Get-Process -Name $procName) {
+        Throw "$procName still running on this host."
+    }
+}
+
+function ensure_service {
+    $ErrorActionPreference = "Stop"
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string]$serviceName,
+        [string]$requestedState = "",
+        [switch]$changeState = $true,
+        [Int]$sleepTimeBeforeCheck = 0,
+    )
+
+    $service = get-service $serviceName -ErrorAction SilentlyContinue
+    if (-not $service) {
+        Throw "The $serviceName service is not registered"
+    }
+
+    if ($changeState) {
+        if $(requestedState -eq "Stopped") {
+            Stop-Service -Name $serviceName -Force
+        }
+        else if $(requestedState -eq "Running") {
+            Start-Service -Name $serviceName
+        }
+    }
+
+    if ($sleepTimeBeforeCheck -eq 0) {
+        Start-Sleep -s $sleepTimeBeforeCheck
+    }
+
+    if ($requestedState -and ($requestedState -ne $service.Status)) {
+        $msg =  "The $serviceName requested state ($requestedState) " +
+                "does not match the current state ($service.Status)"
+        Throw $msg
+    }
+}
+
+function start_openstack_service {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string]$serviceName,
+        [Parameter(Mandatory=$true)]
+        [string]$configFile,
+        [Parameter(Mandatory=$true)]
+        [string]$logDir,
+        [Parameter(Mandatory=$true)]
+        [string]$exeFile
+    )
+    log_message "Starting $serviceName service"
+    Try
+    {
+        ensure_service $serviceName -requestedState "Running" -sleepTimeBeforeCheck 30
+    }
+    Catch
+    {
+        log_message "Can not start the $serviceName service."
+        log_message "Attempting to start $serviceName as a python process."
+        Write-Host Start-Process -PassThru -RedirectStandardError "$logDir\process_error.txt" `
+                  -RedirectStandardOutput "$logDir\process_output.txt" `
+                  -FilePath $exeFile `
+                  -ArgumentList "--config-file $configFile"
+        log_message "Starting nova-compute as a python process." -location "$openstackLogs\nova-compute.log"
+        Try
+        {
+            $proc =  Start-Process -PassThru -RedirectStandardError "$logDir\process_error.txt" `
+                                   -RedirectStandardOutput "$logDir\process_output.txt" `
+                                   -FilePath $exeFile `
+                                   -ArgumentList "--config-file $configFile"
+        }
+        Catch
+        {
+            Throw "Could not start the process manually"
+        }
+        Start-Sleep -s 30
+        if (! $proc.HasExited)
+        {
+            Stop-Process -Id $proc.Id -Force
+            Throw "Process started fine when run manually."
+        }
+        else
+        {
+            Throw "Can not start the $serviceName service. The manual run failed as well."
+        }
+    }
+}
